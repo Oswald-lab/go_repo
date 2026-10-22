@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -13,9 +17,30 @@ import (
 )
 
 type user struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Email        string `json:"email"`
+	PasswordHash string `json:"-"`
+	Salt         string `json:"-"`
+}
+
+func hashPassword(password, salt string) string {
+	sum := sha256.Sum256([]byte(salt + password))
+	return hex.EncodeToString(sum[:])
+}
+
+func newPasswordHash(password string) (hash, salt string, err error) {
+	saltBytes := make([]byte, 16)
+	if _, err := rand.Read(saltBytes); err != nil {
+		return "", "", err
+	}
+	salt = hex.EncodeToString(saltBytes)
+	return hashPassword(password, salt), salt, nil
+}
+
+func (u user) passwordMatches(password string) bool {
+	got := hashPassword(password, u.Salt)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(u.PasswordHash)) == 1
 }
 
 type userStore struct {
@@ -53,6 +78,18 @@ func (s *userStore) get(id string) (user, bool) {
 
 	u, ok := s.users[id]
 	return u, ok
+}
+
+func (s *userStore) findByEmail(email string) (user, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, u := range s.users {
+		if strings.EqualFold(u.Email, email) {
+			return u, true
+		}
+	}
+	return user{}, false
 }
 
 func (s *userStore) delete(id string) bool {
@@ -110,8 +147,9 @@ func newRouter() http.Handler {
 	})
 	auth.Post("/users", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Name  string `json:"name"`
-			Email string `json:"email"`
+			Name     string `json:"name"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -120,12 +158,27 @@ func newRouter() http.Handler {
 
 		input.Name = strings.TrimSpace(input.Name)
 		input.Email = strings.TrimSpace(input.Email)
-		if input.Name == "" || input.Email == "" {
-			writeError(w, http.StatusBadRequest, "name and email are required")
+		if input.Name == "" || input.Email == "" || input.Password == "" {
+			writeError(w, http.StatusBadRequest, "name, email and password are required")
+			return
+		}
+		if _, ok := store.findByEmail(input.Email); ok {
+			writeError(w, http.StatusConflict, "a user with that email already exists")
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, store.create(user{Name: input.Name, Email: input.Email}))
+		hash, salt, err := newPasswordHash(input.Password)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "could not secure password")
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, store.create(user{
+			Name:         input.Name,
+			Email:        input.Email,
+			PasswordHash: hash,
+			Salt:         salt,
+		}))
 	})
 	auth.Get("/users/{id}", func(w http.ResponseWriter, r *http.Request) {
 		u, ok := store.get(chi.URLParam(r, "id"))
@@ -141,6 +194,34 @@ func newRouter() http.Handler {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+
+	r.Post("/login", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		input.Email = strings.TrimSpace(input.Email)
+		if input.Email == "" || input.Password == "" {
+			writeError(w, http.StatusBadRequest, "email and password are required")
+			return
+		}
+
+		u, ok := store.findByEmail(input.Email)
+		if !ok || !u.passwordMatches(input.Password) {
+			writeError(w, http.StatusUnauthorized, "invalid email or password")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"message": "login successful",
+			"user":    u,
+		})
 	})
 
 	return r

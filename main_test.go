@@ -33,7 +33,7 @@ func TestCreateAndGetUser(t *testing.T) {
 	t.Setenv("API_KEY", "secret")
 
 	router := newRouter()
-	createReq := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(`{"name":"Ada","email":"ada@example.com"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(`{"name":"Ada","email":"ada@example.com","password":"s3cret"}`))
 	createReq.Header.Set("X-API-Key", "secret")
 	createRec := httptest.NewRecorder()
 	router.ServeHTTP(createRec, createReq)
@@ -60,5 +60,55 @@ func TestCreateAndGetUser(t *testing.T) {
 	}
 	if !strings.Contains(getRec.Body.String(), "ada@example.com") {
 		t.Fatalf("unexpected body: %s", getRec.Body.String())
+	}
+	if strings.Contains(getRec.Body.String(), "password") {
+		t.Fatalf("response must not expose password data: %s", getRec.Body.String())
+	}
+}
+
+func TestLoginWithValidCredentials(t *testing.T) {
+	t.Setenv("API_KEY", "secret")
+
+	router := newRouter()
+	createReq := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(`{"name":"Ada","email":"ada@example.com","password":"s3cret"}`))
+	createReq.Header.Set("X-API-Key", "secret")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %s", createRec.Code, createRec.Body.String())
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(`{"email":"ada@example.com","password":"s3cret"}`))
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login status = %d, want 200: %s", loginRec.Code, loginRec.Body.String())
+	}
+	if !strings.Contains(loginRec.Body.String(), "ada@example.com") {
+		t.Fatalf("unexpected body: %s", loginRec.Body.String())
+	}
+}
+
+func TestLoginWithInvalidCredentials(t *testing.T) {
+	t.Setenv("API_KEY", "secret")
+
+	router := newRouter()
+	createReq := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(`{"name":"Ada","email":"ada@example.com","password":"s3cret"}`))
+	createReq.Header.Set("X-API-Key", "secret")
+	router.ServeHTTP(httptest.NewRecorder(), createReq)
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(`{"email":"ada@example.com","password":"wrong"}`))
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusUnauthorized {
+		t.Fatalf("login status = %d, want 401: %s", loginRec.Code, loginRec.Body.String())
+	}
+}
+
+func TestLoginRequiresEmailAndPassword(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(`{"email":"","password":""}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
