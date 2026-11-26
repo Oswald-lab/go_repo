@@ -24,6 +24,10 @@ type user struct {
 	Salt         string `json:"-"`
 }
 
+func add(a, b int) int {
+	return a + b
+}
+
 func hashPassword(password, salt string) string {
 	sum := sha256.Sum256([]byte(salt + password))
 	return hex.EncodeToString(sum[:])
@@ -229,5 +233,7 @@ func newRouter() http.Handler {
 
 func main() {
 	log.Println("listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", newRouter()))
+	if err := http.ListenAndServe(":8080", newRouter()); err != nil {
+		log.Fatal(err)
+	}
 }
