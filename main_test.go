@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestAdd(t *testing.T) {
+	cases := []struct {
+		a, b, want int
+	}{
+		{1, 2, 3},
+		{-1, 1, 0},
+		{0, 0, 0},
+		{-5, -7, -12},
+	}
+	for _, c := range cases {
+		if got := add(c.a, c.b); got != c.want {
+			t.Fatalf("add(%d, %d) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 func TestHello(t *testing.T) {
 	rec := httptest.NewRecorder()
 	newRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/hello", nil))
